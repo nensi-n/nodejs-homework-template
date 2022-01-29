@@ -2,73 +2,105 @@
 
 # Cоздание REST API для работы с коллекцией контактов
 
-Создайте ветку `hw04-auth` из ветки `master`.
+Создайте ветку `hw06-email` из ветки `master`.
 
-Продолжите создание REST API для работы с коллекцией контактов. Добавьте логику аутентификации/авторизации пользователя с помощью [JWT](https://jwt.io/).
+Продолжите создание REST API для работы с коллекцией контактов. Добавьте верификацию email пользователя после регистрации при помощи сервиса [SendGrid](https://sendgrid.com/).
+
+## Как процесс верификации должен работать
+
+1. После регистрации, пользователь должен получить письмо на указанную при регистрации почту с ссылкой для верификации своего email
+2. Пройдя ссылке в полученном письме, в первый раз, пользователь должен получить [Ответ со статусом 200](), что будет подразумевать успешную верификацию email
+3. Пройдя по ссылке повторно пользователь должен получить [Ошибку со статусом 404]()
 
 ## Шаг 1
 
-В коде создайте схему и модель пользователя для коллекции `users`.
+### Подготовка интеграции с SendGrid API
 
-```javascript
-{
-  password: {
-    type: String,
-    required: [true, 'Password is required'],
-  },
-  email: {
-    type: String,
-    required: [true, 'Email is required'],
-    unique: true,
-  },
-  subscription: {
-    type: String,
-    enum: ["starter", "pro", "business"],
-    default: "starter"
-  },
-  token: {
-    type: String,
-    default: null,
-  },
-}
-```
-
-Чтобы каждый пользователь работал и видел только свои контакты в схеме контактов добавьте свойство `owner`
-
-```javascript
-owner: {
-      type: Schema.Types.ObjectId,
-      ref: 'user',
-    }
-```
-
-Примечание: `'user'` - название коллекции (в единственном числе), в которой хранятся пользователи.
+- Зарегистрируйся на [SendGrid](https://sendgrid.com/).
+- Создай email-отправителя. Для это в административной панели SendGrid зайдите в меню Marketing в подменю senders и в правом верхнем углу нажмите кнопку "Create New Sender". Заполните необходимые поля в предложенной форме. Сохраните. На указанный email должно прийти письмо верификации (проверьте спам если не видите письма). Кликните на ссылку в нем и завершите процесс.
+- Теперь необходимо создать API токен доступа. Выбираем меню "Email API", и подменю "Integration Guide". Здесь выбираем "Web API". Дальше необходимо выбрать технологию Node.js. На третьем шаге даем имя нашему токену. Например systemcats, нажимаем кнопку сгенерировать и получаем результат как на скриншоте ниже. Необходимо скопировать этот токен (это важно, так как больше вы не сможете его посмотреть). После завершить процесс создания токена
+- Полученный API-токен надо добавить в `.env` файл в нашем проекте
 
 ## Шаг 2
 
-### Регистрация
+### Создание ендпоинта для верификации email'а
 
-Создайте эндпоинт `/users/signup`
-
-Сделать валидацию всех обязательных полей (`email` и `password`). При ошибке валидации вернуть Ошибку валидации.
-
-В случае успешной валидации в модели `User` создать пользователя по данным которые прошли валидацию. Для засолки паролей используй bcrypt или bcryptjs
-
-- Если почта уже используется кем-то другим, вернуть Ошибку Conflict.
-- В противном случае вернуть Успешный ответ.
-
-#### Registration request
+- добавить в модель `User` два поля `verificationToken` и `verify`. Значение поля `verify` равное `false` будет означать, что его email еще не прошел верификацию
 
 ```javascript
-POST /users/signup
-Content-Type: application/json
-RequestBody: {
-  "email": "example@example.com",
-  "password": "examplepassword"
+{ verify: {
+    type: Boolean,
+    default: false,
+  },
+  verificationToken: {
+    type: String,
+    required: [true, 'Verify token is required'],
+  },
+  }
+```
+
+- создать эндпоинт GET [`[/users/verify/:verificationToken`](), где по параметру `verificationToken` мы будем искать пользователя в модели `User`
+- если пользователь с таким токеном не найден, необходимо вернуть [Ошибку 'Not Found']()
+- если пользователь найден - устанавливаем `verificationToken` в `null`, а поле `verify` ставим равным `true` в документе пользователя и возвращаем [Успешный ответ]()
+
+#### Verification request
+
+```javascript
+GET /auth/verify/:verificationToken
+```
+
+#### Verification user Not Found
+
+```javascript
+Status: 404 Not Found
+ResponseBody: {
+  message: 'User not found'
 }
 ```
 
-#### Registration validation error
+#### Verification success response
+
+```javascript
+Status: 200 OK
+ResponseBody: {
+  message: 'Verification successful',
+}
+```
+
+## Шаг 3
+
+### Добавление отправки email пользователю с ссылкой для верификации
+
+При создания пользователя при регистрации:
+
+- создать `verificationToken` для пользователя и записать его в БД (для генерации токена используйте пакет [uuid](https://www.npmjs.com/package/uuid) или [nanoid](https://www.npmjs.com/package/nanoid))
+- отправить email на почту пользователя и указать ссылку для верификации email'а (`/users/verify/:verificationToken`) в сообщении
+- Так же необходимо учитывать, что теперь логин пользователя не разрешен при не верифицированном email
+
+## Шаг 4
+
+### Добавление повторной отправки email пользователю с ссылкой для верификации
+
+Необходимо предусмотреть, вариант, что пользователь может случайно удалить письмо. Оно может не дойти по какой-то причине к адресату. Наш сервис отправки писем во время регистрации выдал ошибку и т.д.
+
+#### @ POST /users/verify/
+
+- Получает `body` в формате `{ email }`
+- Если в `body` нет обязательного поля `email`, возвращает json с ключом `{"message": "missing required field email"}` и статусом `400`
+- Если с `body` все хорошо, выполняем повторную отправку письма с `verificationToken` на указанный email, но только если пользователь не верифицирован
+- Если пользователь уже прошел верификацию отправить json с ключом `{ message: "Verification has already been passed"}` со статусом `400 Bad Request`
+
+##### Resending a email request
+
+```javascript
+POST /users/verify
+Content-Type: application/json
+RequestBody: {
+  "email": "example@example.com"
+}
+```
+
+##### Resending a email validation error
 
 ```javascript
 Status: 400 Bad Request
@@ -76,172 +108,28 @@ Content-Type: application/json
 ResponseBody: <Ошибка от Joi или другой библиотеки валидации>
 ```
 
-#### Registration conflict error
+##### Resending a email success response
 
 ```javascript
-Status: 409 Conflict
+Status: 200 Ok
 Content-Type: application/json
 ResponseBody: {
-  "message": "Email in use"
+  "message": "Verification email sent"
 }
 ```
 
-#### Registration success response
+##### Resend email for verified user
 
 ```javascript
-Status: 201 Created
+Status: 400 Bad Request
 Content-Type: application/json
 ResponseBody: {
-  "user": {
-    "email": "example@example.com",
-    "subscription": "starter"
-  }
+  message: "Verification has already been passed"
 }
 ```
 
-### Логин
-
-Создайте эндпоинт `/users/login`
-
-В модели User найти пользователя по `email`.
-
-Сделать валидацию всех обязательных полей (`email` и `password`). При ошибке валидации вернуть Ошибку валидации.
-
-- В противном случае, сравнить пароль для найденного юзера, если пароли совпадают создать токен, сохранить в текущем юзере и вернуть Успешный ответ.
-- Если пароль или email неверный, вернуть Ошибку Unauthorized.
-  #### Login request
-  ```javascript
-  POST /users/login
-  Content-Type: application/json
-  RequestBody: {
-  "email": "example@example.com",
-  "password": "examplepassword"
-  }
-  ```
-  #### Login validation error
-  ```javascript
-  Status: 400 Bad Request
-  Content-Type: application/json
-  ResponseBody: <Ошибка от Joi или другой библиотеки валидации>
-  ```
-  #### Login success response
-  ```javascript
-  Status: 200 OK
-  Content-Type: application/json
-  ResponseBody: {
-  "token": "exampletoken",
-  "user": {
-  "email": "example@example.com",
-  "subscription": "starter"
-  }
-  }
-  ```
-  #### Login auth error
-  ```javascript
-  Status: 401 Unauthorized
-  ResponseBody: {
-  "message": "Email or password is wrong"
-  }
-  ```
-
-## Шаг 3
-
-### Проверка токена
-
-Создайте мидлвар для проверки токена и добавь его ко всем маршрутам, которые должны быть защищены.
-
-- Мидлвар берет токен из заголовков `Authorization`, проверяет токен на валидность.
-- В случае ошибки вернуть Ошибку Unauthorized.
-- Если валидация прошла успешно, получить из токена `id` пользователя. Найти пользователя в базе данных по этому id.
-- Если пользователь существует и токен совпадает с тем, что находится в базе, записать его данные в `req.user` и вызвать метод`next()`.
-- сли пользователя с таким `id` не существует или токены не совпадают, вернуть Ошибку Unauthorized
-
-#### Middleware unauthorized error
-
-```javascript
-Status: 401 Unauthorized
-Content-Type: application/json
-ResponseBody: {
-"message": "Not authorized"
-}
-```
-
-## Шаг 4
-
-### Логаут
-
-Создайте ендпоинт `/users/logout`
-
-Добавьте в маршрут мидлвар проверки токена.
-
-- В модели `User` найти пользователя по `_id`.
-- Если пользователя не существует вернуть Ошибку Unauthorized.
-- В противном случае, удалить токен в текущем юзере и вернуть Успешный ответ.
-
-#### Logout request
-
-```javascript
-GET / users / logout;
-Authorization: "Bearer {{token}}";
-```
-
-#### Logout unauthorized error
-
-```javascript
-Status: 401 Unauthorized
-Content-Type: application/json
-ResponseBody: {
-"message": "Not authorized"
-}
-```
-
-#### Logout success response
-
-```javascript
-Status: 204 No Content
-```
-
-## Шаг 5
-
-### Текущий пользователь - получить данные юзера по токену
-
-Создайте эндпоинт `/users/current`
-
-Добавьте в маршрут мидлвар проверки токена.
-
-- Если пользователя не существует вернуть Ошибку Unauthorized
-- В противном случае вернуть Успешный ответ
-
-#### Current user request
-
-```javascript
-GET / users / current;
-Authorization: "Bearer {{token}}";
-```
-
-#### Current user unauthorized error
-
-```javascript
-Status: 401 Unauthorized
-Content-Type: application/json
-ResponseBody: {
-"message": "Not authorized"
-}
-```
-
-#### Current user success response
-
-```javascript
-Status: 200 OK
-Content-Type: application/json
-ResponseBody: {
-"email": "example@example.com",
-"subscription": "starter"
-}
-```
+\*\*\* Примечание: Как альтернативу SendGrid можно использовать пакет [nodemailer](https://www.npmjs.com/package/nodemailer)
 
 ### Дополнительное задание - необязательное
 
-- Сделать пагинацию для коллекции контактов (GET /contacts?page=1&limit=20).
-- Сделать фильтрацию контактов по полю избранного (GET /contacts?favorite=true)
-- Обновление подписки (`subscription`) пользователя через эндпоинт `PATCH` /`users`. Подписка должна иметь одно из следующих значений`['starter', 'pro', 'business']`
+1. Напишите dockerfile для вашего приложения
